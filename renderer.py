@@ -8,12 +8,14 @@ from pydub import AudioSegment
 from validation import validate_timeline
 from scene_preprocessor import preprocess_scenes
 from autofix import auto_fix_overlaps
-# from merge_dialogue_ranges import merge_ranges
 
+# DSP features
 from dsp.ducking import apply_simple_ducking, apply_envelope_ducking
 from dsp.compression import apply_dialogue_compression
 from dsp.normalization import normalize_peak
 from dsp.fades import apply_fade_in, apply_fade_out
+from dsp.loudness import apply_lufs_target
+
 
 from utils.debug import debug_print_timeline
 
@@ -214,6 +216,16 @@ def render_timeline(timeline_path:str, output_path:str):
 
     master_gain = settings.get("master_gain",0)
     canvas = canvas + master_gain
+
+    # LUFS Correction
+
+    loudness_cfg = settings.get("loudness")
+
+    if loudness_cfg and loudness_cfg.get("enabled"):
+        canvas = apply_lufs_target(
+            audio = canvas,
+            target_lufs = loudness_cfg.get("target_lufs",-20.0)
+        )
 
     # Normalization
 

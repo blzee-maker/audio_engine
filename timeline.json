@@ -29,6 +29,10 @@
       "scene_crossfade":{
         "enabled":true,
         "duration":1.5
+      },
+      "loudness":{
+        "enabled": true,
+        "target_lufs": -20.0
       }
     },
     
