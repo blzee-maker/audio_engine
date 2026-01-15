@@ -15,6 +15,7 @@ from dsp.compression import apply_dialogue_compression
 from dsp.normalization import normalize_peak
 from dsp.fades import apply_fade_in, apply_fade_out
 from dsp.loudness import apply_lufs_target
+from dsp.balance import apply_role_loudness
 
 
 from utils.debug import debug_print_timeline
@@ -200,9 +201,11 @@ def render_timeline(timeline_path:str, output_path:str):
         track_role = track.get("role")
         clips = track["clips"]
 
+        track_buffer = create_canvas(duration)
+
         for clip in clips:
-            canvas = apply_clip(
-                canvas, 
+            track_buffer = apply_clip(
+                track_buffer, 
                 clip, 
                 track_gain,
                 duration,
@@ -211,6 +214,10 @@ def render_timeline(timeline_path:str, output_path:str):
                 default_ducking=default_ducking,
                 default_compression=default_compression
             )
+
+        track_buffer = apply_role_loudness(track_buffer, track_role)
+
+        canvas = canvas.overlay(track_buffer)
 
     # Master Gain
 

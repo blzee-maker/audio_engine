@@ -32,11 +32,13 @@ def apply_envelope_ducking(audio: AudioSegment, clip_start_sec: float, dialogue_
     fade_down = cfg["fade_down_ms"]
     fade_up = cfg["fade_up_ms"]
     min_pause = cfg["min_pause_ms"]
+    delay_ms = cfg.get("onset_delay_ms", 0) / 1000.0
 
     ranges = merge_ranges(dialogue_ranges, min_pause)
     output = audio
 
     for start, end in ranges:
+        start += delay_ms
         rel_start = int((start - clip_start_sec) * 1000)
         rel_end = int((end - clip_start_sec) * 1000)
 
