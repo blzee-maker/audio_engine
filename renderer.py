@@ -21,6 +21,7 @@ from dsp.balance import apply_role_loudness
 from utils.debug import debug_print_timeline
 from utils.energy import energy_to_music_gain
 from utils.energy_ramp import interpolate_gain
+from utils.dialogue_density import compute_dialogue_density,classify_dialogue_density
 
 def load_timeline(path: str) -> dict:
     with open(path, "r") as f:
@@ -207,6 +208,47 @@ def render_timeline(timeline_path:str, output_path:str):
 
     # Scene Preprocessing
     timeline = preprocess_scenes(timeline)
+
+        # ---- Dialogue Density Debug ----
+
+    dialogue_ranges = []
+
+    for track in timeline.get("tracks", []):
+        if track.get("role") == "voice":
+            for clip in track.get("clips", []):
+                start = clip.get("start")
+                if start is None:
+                    continue
+
+                # duration from file
+                from pydub import AudioSegment
+                audio = AudioSegment.from_file(clip["file"])
+                duration = len(audio) / 1000.0
+
+                dialogue_ranges.append((start, start + duration))
+
+    print("\n🧠 Dialogue Density Analysis")
+    print("-" * 40)
+
+    for scene in timeline.get("scenes", []):
+        s_start = scene["start"]
+        s_end = s_start + scene["duration"]
+
+        ratio = compute_dialogue_density(
+            dialogue_ranges,
+            s_start,
+            s_end
+        )
+
+        level = classify_dialogue_density(ratio)
+        scene_name = scene.get("name", scene.get("id", "Unnamed Scene"))
+        print(
+            f"Scene '{scene_name}': "
+            f"density={ratio:.2f} → {level.upper()}"
+        )
+
+    print("-" * 40 + "\n")
+
 
     # Auto-fix overlaps (per track)
     settings = timeline.get("settings",{})
