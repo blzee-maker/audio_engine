@@ -37,6 +37,9 @@
       "loudness":{
         "enabled": true,
         "target_lufs": -20.0
+      },
+      "energy_ramp":{
+        "duration": 3.0
       }
     },
     
@@ -100,6 +103,7 @@
         "name": "Dialogue Focus",
         "start": 40.0,
         "duration": 60.0,
+        "energy":0.0,
         "rules":{
           "ducking":{
             "duck_amount": -18

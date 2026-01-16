@@ -17,8 +17,10 @@ from dsp.fades import apply_fade_in, apply_fade_out
 from dsp.loudness import apply_lufs_target
 from dsp.balance import apply_role_loudness
 
-
+# Utils
 from utils.debug import debug_print_timeline
+from utils.energy import energy_to_music_gain
+from utils.energy_ramp import interpolate_gain
 
 def load_timeline(path: str) -> dict:
     with open(path, "r") as f:
@@ -59,6 +61,9 @@ def apply_clip(canvas: AudioSegment, clip: dict, track_gain: float, project_dura
 
     clip_rules = clip.get("_rules",{})
 
+    scene_energy = clip_rules.get("scene_energy", 0.5)
+    prev_energy = clip_rules.get("prev_scene_energy")
+
     ducking_cfg = clip_rules.get("ducking", default_ducking)
     compression_cfg = clip_rules.get(
         "dialogue_compression", default_compression
@@ -69,6 +74,54 @@ def apply_clip(canvas: AudioSegment, clip: dict, track_gain: float, project_dura
     if "gain" in clip:
         audio = audio + clip["gain"]
 
+    # Scene Energy -> music intensity
+    if track_role in ("background", "music"):
+        target_gain = energy_to_music_gain(scene_energy)
+
+        if prev_energy is None:
+            audio = audio + target_gain
+        else:
+            start_gain = energy_to_music_gain(prev_energy)
+            ramp_duration_ms = int(
+                clip_rules.get("energy_ramp_duration", 3000)
+            )
+
+            ramp_duration_ms = min(ramp_duration_ms, len(audio))
+
+            # Scene Energy → music intensity (SAFE implementation)
+            if track_role in ("background", "music"):
+                target_gain = energy_to_music_gain(scene_energy)
+
+                if prev_energy is None:
+                    audio = audio + target_gain
+                else:
+                    start_gain = energy_to_music_gain(prev_energy)
+                    ramp_duration_ms = int(
+                        clip_rules.get("energy_ramp_duration", 3000)
+                    )
+
+                    ramp_duration_ms = min(ramp_duration_ms, len(audio))
+
+                    # Split audio
+                    ramp_part = audio[:ramp_duration_ms]
+                    rest_part = audio[ramp_duration_ms:]
+
+                    # Apply starting gain
+                    ramp_part = ramp_part + start_gain
+
+                    # Fade toward target gain
+                    gain_delta = target_gain - start_gain
+                    if gain_delta < 0:
+                        ramp_part = ramp_part.fade_out(ramp_duration_ms)
+                    else:
+                        ramp_part = ramp_part.fade_in(ramp_duration_ms)
+
+                    # Apply final gain to rest
+                    rest_part = rest_part + target_gain
+
+                    audio = ramp_part + rest_part
+
+            
     # 🎤 Dialogue Compression
     if track_role == "voice" and compression_cfg and compression_cfg.get("enabled"):
         audio = apply_dialogue_compression(audio, compression_cfg)

@@ -81,12 +81,15 @@ def preprocess_scenes(timeline:dict)->dict:
         track.setdefault("clips",[])
         track_map[track["id"]] = track
 
+    prev_scene_energy = None
+
     for scene in scenes:
         scene_start = scene["start"]
         scene_end = scene_start + scene["duration"]
 
         scene_tracks = scene.get("tracks",{})
         scene_rules =  scene.get("rules",{})
+        current_energy = scene.get("energy", 0.5)
 
         # merge global + scene rules
 
@@ -108,14 +111,24 @@ def preprocess_scenes(timeline:dict)->dict:
                 if new_clip.get("loop"):
                     new_clip["loop_until"] = scene_end
 
-                # attach scene rules to clip
+                # attach merged rules to clip
                 new_clip["_rules"] = effective_rules.copy()
-                
-                #attatch scene energy
-                new_clip["_rules"]["scene_energy"]= scene.get("energy", 0.5)
+
+                # scene energy (current + previous)
+                new_clip["_rules"]["scene_energy"] = current_energy
+                new_clip["_rules"]["prev_scene_energy"] = prev_scene_energy
+
+                # energy ramp duration (ms)
+                new_clip["_rules"]["energy_ramp_duration"] = (
+                    timeline.get("settings", {})
+                            .get("energy_ramp", {})
+                            .get("duration", 3.0) * 1000
+                )
                 
                 track_map[track_id]["clips"].append(new_clip)
                 print(track_map["music"]["clips"])
+
+        prev_scene_energy = current_energy
 
     # Scene Crossfades (Per track)
 
