@@ -3,29 +3,6 @@ from pydub import AudioSegment
 from utils.ranges import merge_ranges
 
 
-
-# this is static ducking -> updated version is apply_ducking()
-def apply_simple_ducking(audio,clip_start,role_ranges,duck_roles,duck_db,fade_ms):
-    output = audio
-
-    for role in duck_roles:
-        for r_start, r_end in role_ranges.get(role,[]):
-            overlap_start=max(r_start - clip_start,0)
-            overlap_end = min(r_end - clip_start, len(audio)/1000)
-
-            if overlap_start < overlap_end:
-                s_ms = int(overlap_start * 1000)
-                e_ms = int(overlap_end * 1000)
-
-                before = output[:s_ms]
-                during = output[s_ms:e_ms].apply_gain(duck_db)
-                after = output[e_ms:]
-
-                during = during.fade_in(fade_ms).fade_out(fade_ms)
-                output = before + during + after
-            
-    return output
-
 def apply_envelope_ducking(audio: AudioSegment, clip_start_sec: float, dialogue_ranges, cfg: dict) -> AudioSegment:
 
     duck_db = cfg["duck_amount"]

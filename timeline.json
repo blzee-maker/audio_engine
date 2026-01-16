@@ -59,7 +59,8 @@
             "start": 1.5
           },
           {
-            "file": "audio/voice/Scene - 2.wav"
+            "file": "audio/voice/Scene - 2.wav",
+            "start": 40
           }
         ]
       },
@@ -78,6 +79,7 @@
         "name": "Opening Atmosphere",
         "start": 0.0,
         "duration": 40.0,
+        "energy": 0.4,
         "tracks": {
           "music": [
             {

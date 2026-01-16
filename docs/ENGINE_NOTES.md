@@ -93,3 +93,9 @@ Smooth transitions
 No abrupt volume drops
 
 Dialogue intelligibility
+
+
+
+
+
+- Ducking uses a short onset delay (~120ms) to avoid perceptual pre-duck dips before dialogue is heard.

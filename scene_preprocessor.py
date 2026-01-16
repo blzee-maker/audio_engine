@@ -109,7 +109,10 @@ def preprocess_scenes(timeline:dict)->dict:
                     new_clip["loop_until"] = scene_end
 
                 # attach scene rules to clip
-                new_clip["_rules"]= effective_rules
+                new_clip["_rules"] = effective_rules.copy()
+                
+                #attatch scene energy
+                new_clip["_rules"]["scene_energy"]= scene.get("energy", 0.5)
                 
                 track_map[track_id]["clips"].append(new_clip)
                 print(track_map["music"]["clips"])

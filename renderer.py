@@ -10,7 +10,7 @@ from scene_preprocessor import preprocess_scenes
 from autofix import auto_fix_overlaps
 
 # DSP features
-from dsp.ducking import apply_simple_ducking, apply_envelope_ducking
+from dsp.ducking import apply_envelope_ducking
 from dsp.compression import apply_dialogue_compression
 from dsp.normalization import normalize_peak
 from dsp.fades import apply_fade_in, apply_fade_out
@@ -97,16 +97,6 @@ def apply_clip(canvas: AudioSegment, clip: dict, track_gain: float, project_dura
                         clip_start_sec=start_sec,
                         dialogue_ranges=role_ranges[when_role],
                         cfg=ducking_cfg
-                    )
-                else:
-                    # fallback (old behavior)
-                    audio = apply_simple_ducking(
-                        audio,
-                        start_sec,
-                        role_ranges,
-                        [when_role],
-                        ducking_cfg["duck_amount"],
-                        ducking_cfg["fade_ms"]
                     )
 
     canvas = canvas.overlay(audio, position=start_ms)
