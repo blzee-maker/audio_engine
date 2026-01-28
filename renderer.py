@@ -164,6 +164,9 @@ def apply_clip(canvas: AudioSegment, clip: dict, track_gain: float, project_dura
                         dialogue_ranges=role_ranges[when_role],
                         cfg=ducking_cfg
                     )
+                
+                if ducking_cfg.get("mode") == "scene":
+                    audio = audio + ducking_cfg["duck_amount"]
 
     canvas = canvas.overlay(audio, position=start_ms)
 
@@ -294,6 +297,17 @@ def render_timeline(timeline_path:str, output_path:str):
 
     if settings.get("normalize", False):
         canvas = normalize_peak(canvas, target_dbfs=-1.0)
+
+    # 🎬 Master Fade Out (end of story)
+    fade_cfg = settings.get("master_fade_out", {})
+
+    if fade_cfg.get("enabled"):
+        fade_duration_sec = fade_cfg.get("duration", 10.0)
+        fade_ms = int(fade_duration_sec * 1000)
+
+        fade_ms = min(fade_ms, len(canvas))
+        canvas = canvas.fade_out(fade_ms)
+
 
     os.makedirs(os.path.dirname(output_path),exist_ok=True)
     canvas.export(output_path, format="wav")
