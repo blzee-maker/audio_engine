@@ -1,5 +1,8 @@
 import os
 from pydub import AudioSegment
+from dsp.fades import apply_fade_in, apply_fade_out
+
+# TODO: Update the code to print the duration of the audio and ask for the duration to be sliced.
 
 def save_audio_from_start(
     input_audio_path,
@@ -18,6 +21,12 @@ def save_audio_from_start(
     # Trim audio from start
     trimmed_audio = audio[:duration_ms]
 
+    # Apply fade in
+    trimmed_audio = apply_fade_in(trimmed_audio, start_ms=0, fade_ms=1000)
+
+    # Apply fade out
+    trimmed_audio = apply_fade_out(trimmed_audio, clip_start_ms=0, clip_len_ms=duration_ms, project_len_ms=len(audio), fade_ms=1000)
+
     # Output file name
     base_name = os.path.basename(input_audio_path)
     name, ext = os.path.splitext(base_name)
@@ -31,12 +40,20 @@ def save_audio_from_start(
 
     print(f"Saved trimmed audio to: {output_path}")
 
-# -------------------------
-# Example usage
-# -------------------------
+
+def get_audio_duration(input_audio_path):
+    audio = AudioSegment.from_file(input_audio_path)
+    return len(audio) / 1000.0
+
+def get_user_input():
+    duration = float(input("Enter the duration to slice the audio in seconds: "))
+    return duration
+
 if __name__ == "__main__":
-    save_audio_from_start(
-        input_audio_path="audio/sfx/shadowless/cloth_rustling.mp3",
-        duration_seconds=3,
-        output_folder="trimmed_audio"
-    )
+    input_audio_path = "audio/ambience/shadowless/lake_water.mp3"
+    duration = get_audio_duration(input_audio_path)
+    print(f"The duration of the audio is: {duration} seconds")
+    user_input = get_user_input()
+    print(f"The user input is: {user_input}")
+    save_audio_from_start(input_audio_path, user_input)
+    print(f"The audio has been sliced and saved to the output folder.")
