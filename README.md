@@ -9,7 +9,7 @@ The engine consumes a JSON file describing when and how audio assets should play
 
 {
   "timeline": [
-    {
+  {
       "time": 0.0,
       "type": "ambience",
       "audio": "street_night.wav",
