@@ -23,6 +23,8 @@
         "fade_up_ms": 500,
         "min_pause_ms": 300,
 
+        "onset_delay_ms": 500,
+
         "rules": [
           { "when": "voice", "duck": ["background"] }
         ]

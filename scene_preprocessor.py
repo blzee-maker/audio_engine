@@ -1,5 +1,7 @@
 from copy import deepcopy
 
+from utils.dialogue_density import compute_dialogue_density, classify_dialogue_density
+
 def merge_rules(global_rules:dict,scene_rules:dict)->dict:
     """
     Scene rules override global rules(shallow merge).
@@ -81,12 +83,42 @@ def preprocess_scenes(timeline:dict)->dict:
         track.setdefault("clips",[])
         track_map[track["id"]] = track
 
+        # 🔊 Collect all dialogue ranges (once)
+    dialogue_ranges = []
+
+    for track in timeline.get("tracks", []):
+        if track.get("role") != "voice":
+            continue
+
+        for clip in track.get("clips", []):
+            if "start" not in clip:
+                continue
+
+            start = clip["start"]
+            end = clip.get("loop_until", start)
+
+            dialogue_ranges.append((start, end))
+
+
+    prev_scene_energy = None
+
     for scene in scenes:
         scene_start = scene["start"]
         scene_end = scene_start + scene["duration"]
 
+        # 🧠 Dialogue Density (scene-level)
+        density_ratio = compute_dialogue_density(
+            dialogue_ranges,
+            scene_start,
+            scene_end
+        )
+
+        density_label = classify_dialogue_density(density_ratio)
+
+
         scene_tracks = scene.get("tracks",{})
         scene_rules =  scene.get("rules",{})
+        current_energy = scene.get("energy", 0.5)
 
         # merge global + scene rules
 
@@ -108,11 +140,28 @@ def preprocess_scenes(timeline:dict)->dict:
                 if new_clip.get("loop"):
                     new_clip["loop_until"] = scene_end
 
-                # attach scene rules to clip
-                new_clip["_rules"]= effective_rules
+                # attach merged rules to clip
+                new_clip["_rules"] = effective_rules.copy()
+                
+                #Dialogue density
+                new_clip["_rules"]["dialogue_density"] = density_ratio
+                new_clip["_rules"]["dialogue_density_label"] = density_label
+
+                # scene energy (current + previous)
+                new_clip["_rules"]["scene_energy"] = current_energy
+                new_clip["_rules"]["prev_scene_energy"] = prev_scene_energy
+
+                # energy ramp duration (ms)
+                new_clip["_rules"]["energy_ramp_duration"] = (
+                    timeline.get("settings", {})
+                            .get("energy_ramp", {})
+                            .get("duration", 3.0) * 1000
+                )
                 
                 track_map[track_id]["clips"].append(new_clip)
                 print(track_map["music"]["clips"])
+
+        prev_scene_energy = current_energy
 
     # Scene Crossfades (Per track)
 

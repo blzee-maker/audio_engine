@@ -5,19 +5,25 @@ import time
 from pydub.effects import compress_dynamic_range
 from pydub import AudioSegment
 
+
+from utils import dialogue_density
 from validation import validate_timeline
 from scene_preprocessor import preprocess_scenes
 from autofix import auto_fix_overlaps
 
 # DSP features
-from dsp.ducking import apply_simple_ducking, apply_envelope_ducking
+from dsp.ducking import apply_envelope_ducking
 from dsp.compression import apply_dialogue_compression
 from dsp.normalization import normalize_peak
 from dsp.fades import apply_fade_in, apply_fade_out
 from dsp.loudness import apply_lufs_target
+from dsp.balance import apply_role_loudness
 
-
+# Utils
 from utils.debug import debug_print_timeline
+from utils.energy import energy_to_music_gain
+from utils.energy_ramp import interpolate_gain
+
 
 def load_timeline(path: str) -> dict:
     with open(path, "r") as f:
@@ -58,6 +64,11 @@ def apply_clip(canvas: AudioSegment, clip: dict, track_gain: float, project_dura
 
     clip_rules = clip.get("_rules",{})
 
+    dialogue_density = clip_rules.get("dialogue_density_label")
+
+    scene_energy = clip_rules.get("scene_energy", 0.5)
+    prev_energy = clip_rules.get("prev_scene_energy")
+
     ducking_cfg = clip_rules.get("ducking", default_ducking)
     compression_cfg = clip_rules.get(
         "dialogue_compression", default_compression
@@ -68,6 +79,62 @@ def apply_clip(canvas: AudioSegment, clip: dict, track_gain: float, project_dura
     if "gain" in clip:
         audio = audio + clip["gain"]
 
+    # Scene Energy -> music intensity
+    if track_role in ("background", "music"):
+        target_gain = energy_to_music_gain(scene_energy)
+
+        if prev_energy is None:
+            audio = audio + target_gain
+        else:
+            start_gain = energy_to_music_gain(prev_energy)
+            ramp_duration_ms = int(
+                clip_rules.get("energy_ramp_duration", 3000)
+            )
+
+            ramp_duration_ms = min(ramp_duration_ms, len(audio))
+
+            # Scene Energy → music intensity (SAFE implementation)
+            if track_role in ("background", "music"):
+                target_gain = energy_to_music_gain(scene_energy)
+
+                if prev_energy is None:
+                    audio = audio + target_gain
+                else:
+                    start_gain = energy_to_music_gain(prev_energy)
+                    ramp_duration_ms = int(
+                        clip_rules.get("energy_ramp_duration", 3000)
+                    )
+
+                    ramp_duration_ms = min(ramp_duration_ms, len(audio))
+
+                    # Split audio
+                    ramp_part = audio[:ramp_duration_ms]
+                    rest_part = audio[ramp_duration_ms:]
+
+                    # Apply starting gain
+                    ramp_part = ramp_part + start_gain
+
+                    # Fade toward target gain
+                    gain_delta = target_gain - start_gain
+                    if gain_delta < 0:
+                        ramp_part = ramp_part.fade_out(ramp_duration_ms)
+                    else:
+                        ramp_part = ramp_part.fade_in(ramp_duration_ms)
+
+                    # Apply final gain to rest
+                    rest_part = rest_part + target_gain
+
+                    audio = ramp_part + rest_part
+            
+            if track_role in ("background", "music") and dialogue_density:
+                if dialogue_density == "high":
+                    audio = audio - 6     # strong pullback
+                elif dialogue_density == "medium":
+                    audio = audio - 3     # gentle support
+                elif dialogue_density == "low":
+                    audio = audio + 0     # let music breathe
+
+            
     # 🎤 Dialogue Compression
     if track_role == "voice" and compression_cfg and compression_cfg.get("enabled"):
         audio = apply_dialogue_compression(audio, compression_cfg)
@@ -97,16 +164,9 @@ def apply_clip(canvas: AudioSegment, clip: dict, track_gain: float, project_dura
                         dialogue_ranges=role_ranges[when_role],
                         cfg=ducking_cfg
                     )
-                else:
-                    # fallback (old behavior)
-                    audio = apply_simple_ducking(
-                        audio,
-                        start_sec,
-                        role_ranges,
-                        [when_role],
-                        ducking_cfg["duck_amount"],
-                        ducking_cfg["fade_ms"]
-                    )
+                
+                if ducking_cfg.get("mode") == "scene":
+                    audio = audio + ducking_cfg["duck_amount"]
 
     canvas = canvas.overlay(audio, position=start_ms)
 
@@ -200,9 +260,11 @@ def render_timeline(timeline_path:str, output_path:str):
         track_role = track.get("role")
         clips = track["clips"]
 
+        track_buffer = create_canvas(duration)
+
         for clip in clips:
-            canvas = apply_clip(
-                canvas, 
+            track_buffer = apply_clip(
+                track_buffer, 
                 clip, 
                 track_gain,
                 duration,
@@ -211,6 +273,10 @@ def render_timeline(timeline_path:str, output_path:str):
                 default_ducking=default_ducking,
                 default_compression=default_compression
             )
+
+        track_buffer = apply_role_loudness(track_buffer, track_role)
+
+        canvas = canvas.overlay(track_buffer)
 
     # Master Gain
 
@@ -231,6 +297,17 @@ def render_timeline(timeline_path:str, output_path:str):
 
     if settings.get("normalize", False):
         canvas = normalize_peak(canvas, target_dbfs=-1.0)
+
+    # 🎬 Master Fade Out (end of story)
+    fade_cfg = settings.get("master_fade_out", {})
+
+    if fade_cfg.get("enabled"):
+        fade_duration_sec = fade_cfg.get("duration", 10.0)
+        fade_ms = int(fade_duration_sec * 1000)
+
+        fade_ms = min(fade_ms, len(canvas))
+        canvas = canvas.fade_out(fade_ms)
+
 
     os.makedirs(os.path.dirname(output_path),exist_ok=True)
     canvas.export(output_path, format="wav")

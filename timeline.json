@@ -12,7 +12,11 @@
       "ducking":{
         "enabled":true,
         "duck_amount":-12,
-        "fade_ms":200,
+        "fade_down_ms": 500,
+        "fade_up_ms": 500,
+        "min_pause_ms": 300,
+
+        "onset_delay_ms": 120,
         "rules":[
           {"when":"voice","duck":["duckable"]},
           {"when":"foreground","duck":["duckable","background"]}
@@ -33,6 +37,9 @@
       "loudness":{
         "enabled": true,
         "target_lufs": -20.0
+      },
+      "energy_ramp":{
+        "duration": 3.0
       }
     },
     
@@ -55,7 +62,8 @@
             "start": 1.5
           },
           {
-            "file": "audio/voice/Scene - 2.wav"
+            "file": "audio/voice/Scene - 2.wav",
+            "start": 40
           }
         ]
       },
@@ -74,6 +82,7 @@
         "name": "Opening Atmosphere",
         "start": 0.0,
         "duration": 40.0,
+        "energy": 0.4,
         "tracks": {
           "music": [
             {
@@ -94,6 +103,7 @@
         "name": "Dialogue Focus",
         "start": 40.0,
         "duration": 60.0,
+        "energy":0.0,
         "rules":{
           "ducking":{
             "duck_amount": -18
