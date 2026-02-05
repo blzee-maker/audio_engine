@@ -1,3 +1,5 @@
 pydub
 numpy
-scipy>=1.9.0
+scipy
+pytest
+pyloudnorm

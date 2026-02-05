@@ -196,7 +196,6 @@ The renderer has been refactored into smaller, focused classes:
 - **No real-time preview**: Must render full project to hear changes
 - **No API**: Command-line only (REST API planned)
 - **No batch processing**: One project at a time
-
 ---
 
 ## 5. Future Improvement Suggestions
