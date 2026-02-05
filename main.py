@@ -1,8 +1,25 @@
-from renderer import render_timeline
+import sys
+from utils.logger import get_logger
+from renderer import TimelineRenderer
 
-render_timeline(
-    timeline_path="shadowless.json",
-    output_path="output/shadowless/final.wav"
-)
+logger = get_logger(__name__)
 
-print("Audio Rendered Successfully!!")
+def main():
+    if len(sys.argv) < 3:
+        print("Usage: python main.py <timeline.json> <output.wav>")
+        print("Example: python main.py timeline.json output/final.wav")
+        sys.exit(1)
+    
+    timeline_path = sys.argv[1]
+    output_path = sys.argv[2]
+    
+    logger.info(f"Starting audio rendering: {timeline_path} -> {output_path}")
+    renderer = TimelineRenderer()
+    renderer.render(
+        timeline_path=timeline_path,
+        output_path=output_path
+    )
+    logger.info("Audio rendered successfully!")
+
+if __name__ == "__main__":
+    main()

@@ -1,294 +1,318 @@
-🎧 Audio Timeline Engine — Status & Design Notes
+# 🎧 Audio Timeline Engine — Status & Design Notes
 
-Project: Aud-Stories Audio Engine
-Phase: Basic + Intermediate Completed
-Last Updated: (add date)
+**Project:** Aud-Stories Audio Engine  
+**Phase:** Advanced Features In Progress  
+**Last Updated:** February 2026
 
-1. Purpose of This Document
+---
+
+## 1. Purpose of This Document
 
 This file documents:
 
-✅ What has been implemented successfully
-
-🧠 Key engineering decisions taken
-
-⚠️ Known limitations (intentional)
-
-🔮 Guidelines for future upgrades
+- ✅ What has been implemented successfully
+- 🧠 Key engineering decisions taken
+- ⚠️ Known limitations (intentional)
+- 🔮 Guidelines for future upgrades
 
 This is a living document and should be updated whenever a core behavior changes.
 
-2. Current Engine Capabilities (Achieved)
-2.1 Timeline & Rendering Core
+---
 
-JSON-driven audio timeline
+## 2. Current Engine Capabilities
 
-Deterministic rendering (same input → same output)
+### 2.1 Timeline & Rendering Core ✅
 
-Multi-track audio composition
+- JSON-driven audio timeline
+- Deterministic rendering (same input → same output)
+- Multi-track audio composition
+- Timeline-based placement using absolute time (seconds → ms)
+- Refactored architecture with clear separation of concerns
 
-Timeline-based placement using absolute time (seconds → ms)
+### 2.2 Scene System ✅
 
-2.2 Scene System
+- Scene blocks compile into track clips
+- Scenes are not rendered directly
+- Scene preprocessing converts scenes → clips
+- Scene boundaries respected strictly
+- Scene energy mapping (0.0–1.0) drives music gain
 
-Scene blocks compile into track clips
+**Key insight:**
+> Scenes are author intent, not runtime entities
 
-Scenes are not rendered directly
+### 2.3 Rule System (Global + Scene Overrides) ✅
 
-Scene preprocessing converts scenes → clips
+- `settings` define global defaults
+- `scene.rules` override global settings
+- Rules are merged during preprocessing
+- Final merged rules are attached as `_rules` on each clip
 
-Scene boundaries respected strictly
+**Important convention:**
+- `rules` → external (JSON, author-facing)
+- `_rules` → internal (engine-only, compiled)
 
-Key insight:
+### 2.4 Role-Based Ducking ✅
 
-Scenes are author intent, not runtime entities
+- Tracks have semantic roles (`voice`, `duckable`, `background`)
+- Ducking rules defined declaratively
+- Ducking applies only during overlapping time ranges
+- Fade-in/out smoothing applied to ducking envelopes
+- Scene-specific ducking overrides supported
+- **SFX semantic roles** can participate in ducking (`sfx:impact`, `sfx:ambience`)
 
-2.3 Rule System (Global + Scene Overrides)
+**Ducking Configuration:**
+```json
+"ducking": {
+  "enabled": true,
+  "mode": "audacity",
+  "duck_amount": -6,
+  "fade_down_ms": 500,
+  "fade_up_ms": 500,
+  "min_pause_ms": 300,
+  "onset_delay_ms": 120,
+  "rules": [
+    { "when": "voice", "duck": ["background", "sfx:ambience"] },
+    { "when": "sfx:impact", "duck": ["music"] }
+  ]
+}
+```
 
-settings define global defaults
+### 2.5 Dialogue Compression ✅
 
-scene.rules override global settings
+- Applied only to `role = voice`
+- Configurable threshold, ratio, attack, release, makeup gain
+- Scene-level overrides supported
+- Compression runs before fades and ducking
 
-Rules are merged during preprocessing
+### 2.6 Fade In / Fade Out (Timeline-Based) ✅
 
-Final merged rules are attached as _rules on each clip
+**Important achievement:**
+> Fades are applied after placement, in timeline space — not clip space.
 
-Important convention:
+**Why:**
+- `AudioSegment.overlay()` does not preserve perceptual fades reliably
+- Applying fades after placement mirrors DAW behavior
 
-rules → external (JSON, author-facing)
+**Advanced Fade Curves (NEW):**
+- **Linear** — Constant rate fade (default)
+- **Logarithmic** — Slower start, faster end (natural fade-in)
+- **Exponential** — Faster start, slower end (sharp transitions)
 
-_rules → internal (engine-only, compiled)
-
-2.4 Role-Based Ducking
-
-Tracks have semantic roles (voice, duckable, background)
-
-Ducking rules defined declaratively
-
-Ducking applies only during overlapping time ranges
-
-Fade-in/out smoothing applied to ducking envelopes
-
-Scene-specific ducking overrides supported
-
-2.5 Dialogue Compression
-
-Applied only to role = voice
-
-Configurable threshold, ratio, attack, release, makeup gain
-
-Scene-level overrides supported
-
-Compression runs before fades and ducking
-
-2.6 Fade In / Fade Out (Timeline-Based)
-
-Important achievement:
-Fades are applied after placement, in timeline space — not clip space.
-
-Why:
-
-AudioSegment.overlay() does not preserve perceptual fades reliably
-
-Applying fades after placement mirrors DAW behavior
-
-Current approach:
-
-Place clip on canvas
-
-Apply fade on the exact timeline slice
-
-2.7 Scene Crossfade
+### 2.7 Scene Crossfade ✅
 
 Scene crossfade is implemented as:
+- Fade-out on outgoing clip
+- Fade-in on incoming clip
+- Explicit time overlap between scenes
 
-Fade-out on outgoing clip
+**Key rule learned:**
+> Fade ≠ Crossfade  
+> Crossfade = Fade + Overlap
 
-Fade-in on incoming clip
+### 2.8 Overlap Auto-Fix ✅
 
-Explicit time overlap between scenes
+- Detects overlapping clips on same track
+- Shifts later clips forward
+- Preserves loop duration
+- Prevents timeline corruption from AI-generated input
 
-Key rule learned:
+### 2.9 EQ System ✅ (NEW)
 
-Fade ≠ Crossfade
-Crossfade = Fade + Overlap
+**Intent-First Design:**
+- Authors use semantic presets (`dialogue_clean`, `music_bed`)
+- Engine handles frequency details internally
 
-2.8 Overlap Auto-Fix
+**Available Presets:**
+| Preset | Intent |
+|--------|--------|
+| `dialogue_clean` | Clear voice, no rumble |
+| `dialogue_warm` | Rich voice, less bright |
+| `dialogue_broadcast` | Broadcast-ready voice |
+| `music_full` | Full spectrum music |
+| `music_bed` | Music as background bed |
+| `background_soft` | Non-invasive ambience |
+| `background_distant` | Far-away feel |
+| `sfx_punch` | Impactful SFX |
+| `sfx_subtle` | Gentle SFX presence |
 
-Detects overlapping clips on same track
+**Scene-Level Tonal Shaping:**
+- `tilt`: "warm", "neutral", "bright"
+- `high_shelf`: dB adjustment above ~4kHz
+- `low_shelf`: dB adjustment below ~200Hz
 
-Shifts later clips forward
+### 2.10 SFX Semantic Roles ✅ (NEW)
 
-Preserves loop duration
+**Valid Semantic Roles:**
+| Role | LUFS Target | Fade In | Fade Out | Curve |
+|------|-------------|---------|----------|-------|
+| `impact` | -18.0 | 0ms | 75ms | Exponential |
+| `movement` | -20.0 | 150ms | 150ms | Linear |
+| `ambience` | -22.0 | 750ms | 750ms | Logarithmic |
+| `interaction` | -20.0 | 250ms | 250ms | Linear |
+| `texture` | -24.0 | 1500ms | 1500ms | Logarithmic |
 
-Prevents timeline corruption from AI-generated input
+### 2.11 LUFS Loudness ✅
 
-2.9 Debug Timeline View
+- Target: -20 LUFS (cinematic)
+- Role-based loudness targets
+- Safety clamping (max boost/cut limits)
 
-Human-readable timeline dump
+### 2.12 Logging System ✅ (NEW)
 
-Shows:
+- Structured logging with Python's `logging` module
+- Configurable log levels (DEBUG, INFO, WARNING, ERROR)
+- Performance timing for rendering stages
 
-Track
+### 2.13 Debug Timeline View ✅
 
-Clip start/end
+Human-readable timeline dump showing:
+- Track
+- Clip start/end
+- Loop ranges
+- Fade info
+- Ducking & compression values
 
-Loop ranges
+---
 
-Fade info
+## 3. Key Engineering Decisions
 
-Ducking & compression values
-
-Defensive: skips clips without start
-
-3. Key Engineering Decisions (Important)
-3.1 Timeline-Space Processing
+### 3.1 Timeline-Space Processing
 
 All perceptual effects (fade, ducking, compression) are reasoned in timeline space, not clip space.
 
-Reason:
+**Reason:**
+- Prevents overlay-related artifacts
+- Ensures predictable interaction between systems
 
-Prevents overlay-related artifacts
-
-Ensures predictable interaction between systems
-
-3.2 Defensive Handling of Clips
+### 3.2 Defensive Handling of Clips
 
 Any function that:
+- Sorts by time
+- Detects overlaps
+- Applies transitions
 
-Sorts by time
-
-Detects overlaps
-
-Applies transitions
-
-Must ignore clips without start
+**Must ignore clips without `start`.**
 
 This prevents crashes during intermediate compilation stages.
 
-3.3 Fade Strategy (Current)
+### 3.3 Fade Strategy
 
 Current fade implementation uses:
+- Multiple curve types (linear, logarithmic, exponential)
+- Timeline-space application for perceptual accuracy
 
-Linear fade
+### 3.4 Intent-First EQ
 
-Pre-attenuation (e.g. -18 dB) to improve perceptual smoothness
+EQ is exposed through semantic presets rather than raw Hz values.
+- Authors describe what they want
+- Engine handles frequency knowledge internally
+- Versionable presets for safe evolution
 
-This is intentional and temporary.
+### 3.5 SFX Semantic/Mix Role Separation
 
-4. Known Limitations (Accepted for Now)
+- `role` = **mix_role** (foreground/background/voice)
+- `semantic_role` = **what the sound represents** (impact, movement, etc.)
+
+These are orthogonal concepts that answer different questions.
+
+---
+
+## 4. Known Limitations (Accepted)
 
 These are not bugs, they are planned constraints.
 
-4.1 Fade Curves
+### 4.1 No Reverb
+- No spatial effects
+- **Planned:** Advanced phase
 
-Fades are linear, not logarithmic/exponential
+### 4.2 Performance
+- Entire project loaded into memory
+- No parallelization
+- **Planned:** Streaming, parallel processing
 
-Psychoacoustic accuracy is acceptable but not perfect
+### 4.3 No API
+- Command-line only
+- **Planned:** REST API with FastAPI
 
-Planned upgrade:
+---
 
-Curve-based fades in Advanced phase
+## 5. Testing Status
 
-4.2 Loudness Standard
+### Completed Tests ✅
+- Basic feature tests
+- Intermediate feature interaction tests
+- Fade-in / fade-out isolated tests
+- Scene crossfade tests
+- Ducking + crossfade overlap tests
+- EQ preset application tests
+- SFX semantic role tests
+- Advanced fade curve tests
 
-No LUFS normalization
+### Philosophy
+> If debug output matches what you hear, the system is trusted
 
-Only peak normalization supported
+---
 
-Planned upgrade:
+## 6. Audio Pipeline Order (DO NOT CHANGE)
 
-LUFS-based mastering
+```
+1. Load Audio
+2. Apply Track/Clip Gain
+3. Apply EQ (role preset)      ← NEW
+4. Apply SFX Processing        ← NEW
+5. Apply Energy Ramp
+6. Apply Ducking
+7. Apply Dialogue Compression
+8. Overlay to Canvas
+9. Apply Scene Tonal Shaping   ← NEW
+10. Apply Fades
+──────────────────────────────
+11. Track Mix
+12. LUFS Loudness Correction
+13. Master Gain
+14. Peak Normalization
+15. Export
+```
 
-Platform presets (Spotify / Podcast / Audiobook)
+**Reason:**
+- EQ shapes frequencies before ducking (for cleaner separation)
+- LUFS must operate on perceptual loudness of the full mix
+- Peak normalization is safety, not loudness control
+- Reordering breaks cinematic dynamics
 
-4.3 DSP Scope
+---
 
-No EQ
+## 7. Loudness Standard (Cinematic)
 
-No reverb
+| Parameter | Value |
+|-----------|-------|
+| Integrated LUFS target | −20.0 |
+| Dialogue anchor | ~−18 LUFS |
+| True peak ceiling | −1.0 dBFS |
 
-No true sidechain compression
+**Why:** Preserves dynamic range while maintaining clarity for story-driven audio.
 
-Planned upgrade:
+---
 
-Pedalboard / DSP chain integration
-
-5. Testing Status
-Completed
-
-Basic feature tests
-
-Intermediate feature interaction tests
-
-Fade-in / fade-out isolated tests
-
-Scene crossfade tests
-
-Ducking + crossfade overlap tests
-
-Philosophy
-
-If debug output matches what you hear, the system is trusted
-
-6. Guidelines for Future Upgrades
+## 8. Guidelines for Future Upgrades
 
 Before adding a new feature, ask:
 
-Does this operate in clip space or timeline space?
+1. Does this operate in clip space or timeline space?
+2. Does it interact with fades, ducking, or compression?
+3. Can it break determinism?
+4. Can it be disabled cleanly?
 
-Does it interact with fades, ducking, or compression?
+**If unclear → document before coding.**
 
-Can it break determinism?
+---
 
-Can it be disabled cleanly?
+## 9. Final Engineering Principle
 
-If unclear → document before coding.
-
-7. Next Planned Phase (Advanced)
-
-Planned future work:
-
-Logarithmic / exponential fade curves
-
-LUFS loudness normalization
-
-True sidechain compression
-
-DSP effect chains
-
-API-based rendering (FastAPI)
-
-Batch rendering & caching
-
-8. Final Engineering Principle (Lock This In)
-
-Correctness → Predictability → Perceptual Quality
+> **Correctness → Predictability → Perceptual Quality**
 
 We do not skip stages.
 
+---
 
-
-
-Ducking System v2 — Audacity Style
-
-Envelope-based ducking
-
-Timeline-aware (not clip-based)
-
-Phases:
-
-Fade down (pre-dialogue)
-
-Duck hold
-
-Fade up (post-dialogue)
-
-Small dialogue gaps ignored via min_pause_ms
-
-Enabled via:
-
-"ducking": { "mode": "audacity" }
-
-
-Status: Stable and locked for Intermediate phase
+*Document updated: February 2026*

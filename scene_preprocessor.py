@@ -1,8 +1,12 @@
 from copy import deepcopy
+from typing import Dict, List, Optional
 
 from utils.dialogue_density import compute_dialogue_density, classify_dialogue_density
+from utils.logger import get_logger
 
-def merge_rules(global_rules:dict,scene_rules:dict)->dict:
+logger = get_logger(__name__)
+
+def merge_rules(global_rules: Dict, scene_rules: Dict) -> Dict:
     """
     Scene rules override global rules(shallow merge).
     """
@@ -21,7 +25,7 @@ def merge_rules(global_rules:dict,scene_rules:dict)->dict:
     return merged
 
 
-def apply_scene_crossfades(track_clips, default_duration):
+def apply_scene_crossfades(track_clips: List[Dict], default_duration: float) -> None:
     
     """
     Adds fade_out to clip[i] and fade_in to clip[i+1]
@@ -64,7 +68,7 @@ def apply_scene_crossfades(track_clips, default_duration):
             if b["start"] < 0:
                 b["start"] = 0
 
-def preprocess_scenes(timeline:dict)->dict:
+def preprocess_scenes(timeline: Dict) -> Dict:
     """
     Convert scene blocks into normal track clips.
     Mutates and returns timeline.
@@ -130,10 +134,19 @@ def preprocess_scenes(timeline:dict)->dict:
                     f"Scene references unknown track '{track_id}"
                 )
 
+            # Get track-level semantic_role (if present)
+            track = track_map[track_id]
+            track_semantic_role = track.get("semantic_role")
+
             for clip in clips:
                 new_clip = deepcopy(clip)
 
                 new_clip["start"] = scene_start + clip.get("offset",0)
+
+                # Preserve semantic_role: clip-level overrides track-level
+                # If clip doesn't have semantic_role, inherit from track
+                if "semantic_role" not in new_clip and track_semantic_role is not None:
+                    new_clip["semantic_role"] = track_semantic_role
 
                 #Auto-loop till scene end
 
@@ -159,7 +172,7 @@ def preprocess_scenes(timeline:dict)->dict:
                 )
                 
                 track_map[track_id]["clips"].append(new_clip)
-                print(track_map["music"]["clips"])
+                logger.debug(f"Added clip to track '{track_id}': {new_clip.get('file', 'unknown')}")
 
         prev_scene_energy = current_energy
 

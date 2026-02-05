@@ -1,12 +1,19 @@
 import os
 import json
+from typing import Dict, List
 from pydub import AudioSegment
 
 
+# Valid semantic roles for SFX
+VALID_SEMANTIC_ROLES = {"impact", "movement", "ambience", "interaction", "texture"}
+
+
 class ValidationError(Exception):
+    """Raised when timeline validation fails."""
     pass
 
-def validate_timeline(timeline:dict):
+
+def validate_timeline(timeline: Dict) -> List[str]:
     errors=[]
     warnings=[]
 
@@ -31,6 +38,23 @@ def validate_timeline(timeline:dict):
 
     for track in tracks or []:
         track_id = track.get("id","UNKNOWN_TRACK")
+        
+        # Validate semantic_role at track level (if present)
+        track_semantic_role = track.get("semantic_role")
+        if track_semantic_role is not None:
+            if track_semantic_role not in VALID_SEMANTIC_ROLES:
+                warnings.append(
+                    f"Track '{track_id}' has invalid semantic_role '{track_semantic_role}'. "
+                    f"Valid roles: {', '.join(sorted(VALID_SEMANTIC_ROLES))}"
+                )
+        
+        # Warn if SFX track doesn't have semantic_role
+        track_type = track.get("type", "")
+        if track_type == "sfx" and track_semantic_role is None:
+            warnings.append(
+                f"SFX track '{track_id}' doesn't have semantic_role. "
+                f"Consider adding one: {', '.join(sorted(VALID_SEMANTIC_ROLES))}"
+            )
 
         clips = track.get("clips")
 
@@ -45,6 +69,15 @@ def validate_timeline(timeline:dict):
             if not file_path:
                 errors.append(f"Track '{track_id}': clip missing file path")
                 continue
+            
+            # Validate semantic_role at clip level (if present)
+            clip_semantic_role = clip.get("semantic_role")
+            if clip_semantic_role is not None:
+                if clip_semantic_role not in VALID_SEMANTIC_ROLES:
+                    warnings.append(
+                        f"Clip '{file_path}' in track '{track_id}' has invalid semantic_role '{clip_semantic_role}'. "
+                        f"Valid roles: {', '.join(sorted(VALID_SEMANTIC_ROLES))}"
+                    )
 
             if not os.path.exists(file_path):
                 errors.append(f"Missing audio file:{file_path}")
@@ -92,6 +125,32 @@ def validate_timeline(timeline:dict):
 
             last_end = max(last_end, end)
 
+    # Validate ducking rules reference valid semantic roles
+    settings = timeline.get("settings", {})
+    ducking_cfg = settings.get("ducking")
+    if ducking_cfg and ducking_cfg.get("enabled"):
+        rules = ducking_cfg.get("rules", [])
+        for rule in rules:
+            when_role = rule.get("when", "")
+            # Check if it's a semantic role reference (sfx:role)
+            if when_role.startswith("sfx:"):
+                semantic_role = when_role.split(":", 1)[1]
+                if semantic_role not in VALID_SEMANTIC_ROLES:
+                    warnings.append(
+                        f"Ducking rule references invalid semantic role '{semantic_role}' in 'when' field. "
+                        f"Valid roles: {', '.join(sorted(VALID_SEMANTIC_ROLES))}"
+                    )
+            
+            # Check duck targets
+            duck_targets = rule.get("duck", [])
+            for duck_target in duck_targets:
+                if duck_target.startswith("sfx:"):
+                    semantic_role = duck_target.split(":", 1)[1]
+                    if semantic_role not in VALID_SEMANTIC_ROLES:
+                        warnings.append(
+                            f"Ducking rule references invalid semantic role '{semantic_role}' in 'duck' field. "
+                            f"Valid roles: {', '.join(sorted(VALID_SEMANTIC_ROLES))}"
+                        )
 
         if errors:
             raise ValidationError(

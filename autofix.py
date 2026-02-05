@@ -1,6 +1,8 @@
+from typing import Dict
 from pydub import AudioSegment
 
-def auto_fix_overlaps(track:dict, min_gap: float = 0.0):
+
+def auto_fix_overlaps(track: Dict, min_gap: float = 0.0) -> None:
     """
     Shifts overlapping clips forward on the same track.
     min_gap: optional silence (seconds) to keep between clips.
