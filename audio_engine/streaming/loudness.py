@@ -51,3 +51,29 @@ class StreamingLoudnessEstimator:
             return 0.0
         estimated_lufs = float(np.mean(self.measurements))
         return compute_lufs_gain_db(estimated_lufs, self.target_lufs)
+
+
+def compute_peak_gain_db(max_abs: float, target_dbfs: float) -> float:
+    """
+    Compute gain needed to reach target peak dBFS from a max absolute sample value.
+    """
+    if max_abs <= 0.0:
+        return 0.0
+    current_dbfs = 20.0 * float(np.log10(max_abs))
+    return target_dbfs - current_dbfs
+
+
+class StreamingPeakEstimator:
+    """
+    Track max peak across chunks for streaming peak normalization.
+    """
+
+    def __init__(self) -> None:
+        self.max_abs = 0.0
+
+    def process_chunk(self, samples: np.ndarray) -> None:
+        if samples.size == 0:
+            return
+        max_abs = float(np.max(np.abs(samples)))
+        if max_abs > self.max_abs:
+            self.max_abs = max_abs

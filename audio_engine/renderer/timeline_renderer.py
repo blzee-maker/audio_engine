@@ -17,7 +17,12 @@ from audio_engine.renderer.master_processor import MasterProcessor
 from audio_engine.streaming.clip_scheduler import ClipScheduler
 from audio_engine.streaming.chunk_processor import ChunkProcessor
 from audio_engine.streaming.stream_writer import StreamWriter
-from audio_engine.streaming.loudness import measure_lufs_from_file, compute_lufs_gain_db
+from audio_engine.streaming.loudness import (
+    measure_lufs_from_file,
+    compute_lufs_gain_db,
+    StreamingPeakEstimator,
+    compute_peak_gain_db,
+)
 from audio_engine.dsp.eq import apply_scene_tonal_shaping
 from audio_engine.dsp.fade_curves import FadeCurve
 from audio_engine.dsp.fades import apply_fade_out
@@ -311,13 +316,16 @@ class TimelineRenderer:
             sample_width=sample_width,
         )
 
-        if config.normalize_peak:
-            logger.warning("Peak normalization not supported in streaming mode; skipping.")
-
         scene_eq = settings.get("eq", {})
         temp_output = output_path
 
-        def render_pass(output_file: str, gain_db: float = 0.0, estimator=None) -> None:
+        def render_pass(
+            output_file: str,
+            gain_db: float = 0.0,
+            estimator=None,
+            peak_estimator: Optional[StreamingPeakEstimator] = None,
+            peak_gain_db: float = 0.0,
+        ) -> None:
             writer = StreamWriter(
                 output_path=output_file,
                 sample_rate=sample_rate,
@@ -325,6 +333,7 @@ class TimelineRenderer:
                 sample_width=sample_width,
             )
             writer.open()
+            chunk_processor.reset_streaming_state()
 
             chunk_start = 0.0
             while chunk_start < duration:
@@ -353,6 +362,13 @@ class TimelineRenderer:
                 if scene_eq:
                     chunk_audio = apply_scene_tonal_shaping(chunk_audio, scene_eq)
 
+                if peak_estimator is not None:
+                    from audio_engine.dsp.loudness import audiosegment_to_float
+                    peak_estimator.process_chunk(audiosegment_to_float(chunk_audio))
+
+                if peak_gain_db != 0:
+                    chunk_audio = chunk_audio.apply_gain(peak_gain_db)
+
                 # Master fade-out for last segment
                 if config.master_fade_out:
                     fade_duration_sec = config.master_fade_out.get("duration", 10.0)
@@ -374,7 +390,33 @@ class TimelineRenderer:
 
             writer.close()
 
-        if config.loudness and two_pass_lufs:
+        if config.normalize_peak:
+            temp_output = f"{output_path}.tmp.wav"
+            peak_estimator = StreamingPeakEstimator()
+            render_pass(temp_output, peak_estimator=peak_estimator)
+
+            lufs_gain_db = 0.0
+            if config.loudness:
+                measured_lufs = measure_lufs_from_file(temp_output)
+                lufs_gain_db = compute_lufs_gain_db(
+                    current_lufs=measured_lufs,
+                    target_lufs=config.target_lufs,
+                )
+                logger.info(
+                    "Streaming LUFS pass complete: measured %.2f, gain %.2f dB",
+                    measured_lufs,
+                    lufs_gain_db,
+                )
+
+            peak_after_lufs = peak_estimator.max_abs * (10 ** (lufs_gain_db / 20.0))
+            peak_gain_db = compute_peak_gain_db(peak_after_lufs, config.peak_target_dbfs)
+
+            render_pass(output_path, gain_db=lufs_gain_db, peak_gain_db=peak_gain_db)
+            try:
+                os.remove(temp_output)
+            except OSError:
+                logger.warning(f"Failed to remove temp file: {temp_output}")
+        elif config.loudness and two_pass_lufs:
             temp_output = f"{output_path}.tmp.wav"
             render_pass(temp_output)
             measured_lufs = measure_lufs_from_file(temp_output)

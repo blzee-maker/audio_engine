@@ -59,6 +59,67 @@ SEMANTIC_ROLE_FADE_DEFAULTS = {
     }
 }
 
+# Scene energy gain ranges per semantic role (min_db at low energy, max_db at high energy)
+SCENE_ENERGY_GAIN_MAP = {
+    "impact": {"min_db": -1.5, "max_db": 1.5},
+    "movement": {"min_db": -1.0, "max_db": 1.0},
+    "ambience": {"min_db": -2.0, "max_db": 0.5},
+    "interaction": {"min_db": -1.0, "max_db": 1.0},
+    "texture": {"min_db": -2.5, "max_db": 0.5},
+}
+
+SCENE_ENERGY_GAIN_CLAMP = (-6.0, 3.0)
+
+
+def _normalize_scene_energy(scene_energy: float) -> float:
+    value = 0.5 if scene_energy is None else float(scene_energy)
+    value = max(0.0, min(1.0, value))
+    return value * 2.0 - 1.0
+
+
+def _resolve_scene_energy_gain_range(
+    semantic_role: str,
+    clip_rules: Optional[Dict],
+) -> Optional[Tuple[float, float]]:
+    default_range = SCENE_ENERGY_GAIN_MAP.get(semantic_role)
+    if not default_range:
+        return None
+
+    override = None
+    if clip_rules:
+        override = clip_rules.get("sfx_scene_energy_gain")
+
+    if isinstance(override, dict) and semantic_role in override:
+        override = override[semantic_role]
+
+    if isinstance(override, (int, float)):
+        max_db = abs(float(override))
+        return -max_db, max_db
+
+    if isinstance(override, (list, tuple)) and len(override) == 2:
+        return float(override[0]), float(override[1])
+
+    if isinstance(override, dict):
+        min_db = override.get("min_db", override.get("min"))
+        max_db = override.get("max_db", override.get("max"))
+        if min_db is not None or max_db is not None:
+            return (
+                float(min_db if min_db is not None else default_range["min_db"]),
+                float(max_db if max_db is not None else default_range["max_db"]),
+            )
+
+    return float(default_range["min_db"]), float(default_range["max_db"])
+
+
+def _compute_scene_energy_gain_db(
+    scene_energy: float,
+    gain_range: Tuple[float, float],
+) -> float:
+    min_db, max_db = gain_range
+    norm = _normalize_scene_energy(scene_energy)
+    gain_db = min_db + (norm + 1.0) * 0.5 * (max_db - min_db)
+    return max(SCENE_ENERGY_GAIN_CLAMP[0], min(SCENE_ENERGY_GAIN_CLAMP[1], gain_db))
+
 
 def get_sfx_loudness_target(semantic_role: Optional[str]) -> Optional[float]:
     """
@@ -164,7 +225,10 @@ def apply_sfx_processing(
     # Apply micro-timing adjustments
     audio = apply_sfx_timing(audio, semantic_role)
     
-    # Future: Could add scene energy-based adjustments here
-    # For v1, keep it minimal
+    gain_range = _resolve_scene_energy_gain_range(semantic_role, clip_rules)
+    if gain_range:
+        gain_db = _compute_scene_energy_gain_db(scene_energy, gain_range)
+        if gain_db != 0:
+            audio = audio.apply_gain(gain_db)
     
     return audio

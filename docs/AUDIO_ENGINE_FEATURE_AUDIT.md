@@ -1,6 +1,7 @@
 # Audio Engine Feature Audit
 
 **Audit Date:** February 5, 2026  
+**Last Updated:** February 6, 2026  
 **Auditor:** Om Jha  
 **Scope:** Full repository scan — feature-completion verification  
 
@@ -69,13 +70,14 @@ The following features are **defined**, **passed through the pipeline**, and **c
 
 | Aspect | Location |
 |--------|----------|
-| Calculated | `dsp/sfx_processor.py:apply_sfx_timing()` (line 96) |
-| Where it stops | Function body is effectively `pass` for impact role (line 126) |
+| Calculated | `dsp/sfx_processor.py:apply_sfx_timing()` (line 157) |
+| Where it stops | Function body is effectively `pass` for impact role (line 182-187) |
 | Missing | Actual silence-trimming implementation |
 
 **Evidence:**
+
 ```python
-# dsp/sfx_processor.py lines 121-126
+# dsp/sfx_processor.py lines 182-187
 if semantic_role == "impact":
     # Trim up to 10ms of silence at start and end
     silence_threshold_ms = 10
@@ -84,34 +86,26 @@ if semantic_role == "impact":
     pass
 ```
 
-The function `apply_sfx_timing()` is called in `apply_sfx_processing()` (line 165), but performs no actual audio modification.
+The function `apply_sfx_timing()` is called in `apply_sfx_processing()` (line 226), but performs no actual audio modification.
 
 ---
 
-### 2. Scene Energy for SFX
+## Recently Implemented
 
-**Status:** Passed but never used
+### Scene Energy for SFX
+
+**Status:** ✅ Implemented
 
 | Aspect | Location |
 |--------|----------|
 | Calculated | `scene_preprocessor.py:164` — attached to `_rules` |
-| Passed to | `dsp/sfx_processor.py:apply_sfx_processing()` via `clip_processor.py:166` |
-| Where it stops | Comment on line 167 of `sfx_processor.py`: "Future: Could add scene energy-based adjustments here" |
-| Missing | Any actual audio modification based on scene energy for SFX tracks |
-
-**Evidence:**
-```python
-# dsp/sfx_processor.py lines 166-170
-# Apply micro-timing adjustments
-audio = apply_sfx_timing(audio, semantic_role)
-
-# Future: Could add scene energy-based adjustments here
-# For v1, keep it minimal
-```
+| Applied in | `dsp/sfx_processor.py:apply_sfx_processing()` (lines 228-232) |
+| Behavior | Role-specific linear gain from normalized scene energy (-1.0 to +1.0) |
+| Overrides | Optional per-clip `clip_rules.sfx_scene_energy_gain` |
 
 ---
 
-## Defined but Not Applied
+## Defined but Unused
 
 ### 1. `interpolate_gain()` Function
 
@@ -125,62 +119,69 @@ audio = apply_sfx_timing(audio, semantic_role)
 
 The `apply_energy_ramp()` function uses pydub's `fade_in()` / `fade_out()` as an approximation instead of sample-level interpolation using `interpolate_gain()`.
 
+Defined for future sample-accurate ramps; current implementation uses pydub fades as a perceptual approximation.
+
 ---
 
-### 2. `StreamingCompressor` Class
+## Streaming Infrastructure (Implemented)
+
+### 1. `StreamingCompressor` Class
 
 | Aspect | Details |
 |--------|---------|
 | File | `audio_engine/dsp/streaming_compressor.py` |
 | Line | 10 |
 | Definition | Full stateful compressor with attack/release envelope |
-| Usage | **Never imported or instantiated** |
+| Usage | ✅ **Used in streaming chunk processing for voice compression** |
 
-This class was designed for chunk-by-chunk compression in streaming mode but is not used. The streaming pipeline does not apply dialogue compression statelessly across chunks.
+This class is instantiated in the streaming pipeline and applied per voice track buffer to preserve compression continuity across chunks (`chunk_processor.py:221-237`).
 
 ---
 
-### 3. Stateful Streaming EQ Filters
+### 2. Stateful Streaming EQ Filters
 
 | Class | File | Line | Usage |
 |-------|------|------|-------|
-| `StreamingHighPass` | `dsp/streaming_eq.py` | 52 | **Never used** |
-| `StreamingLowPass` | `dsp/streaming_eq.py` | 60 | **Never used** |
-| `StreamingPeakEQ` | `dsp/streaming_eq.py` | 68 | **Never used** |
+| `StreamingHighPass` | `dsp/streaming_eq.py` | 52 | ✅ **Used in streaming chunk processing** |
+| `StreamingLowPass` | `dsp/streaming_eq.py` | 60 | ✅ **Used in streaming chunk processing** |
+| `StreamingPeakEQ` | `dsp/streaming_eq.py` | 68 | ✅ **Used in streaming chunk processing** |
 
-These classes provide stateful IIR filtering for proper DSP continuity across chunk boundaries. However, the streaming pipeline uses the same stateless `clip_processor.py` path, which applies `apply_eq_preset()` per-clip rather than maintaining filter state across chunks.
-
-**Implication:** EQ filtering in streaming mode may have discontinuities at chunk boundaries for clips that span multiple chunks.
+These classes back streaming EQ in `chunk_processor.py:68-101, 170-187`, keeping filter state per clip across chunks while `clip_processor.py` skips re-applying EQ.
 
 ---
 
-### 4. `ChunkLoader` Class
+### 3. `ChunkLoader` Class
 
 | Aspect | Details |
 |--------|---------|
 | File | `audio_engine/streaming/chunk_loader.py` |
 | Line | 25 |
 | Exported | `streaming/__init__.py:5` |
-| Usage | **Never instantiated** |
+| Usage | ✅ **Used by `ChunkProcessor` for streaming slices** |
 
-The streaming pipeline uses `AudioSegment.from_file()` with `start_second` and `duration` parameters directly in `chunk_processor.py:70-74` instead of the `ChunkLoader` abstraction.
+The streaming pipeline uses `ChunkLoader.get_chunk()` in `chunk_processor.py:149-156` to load slices and resample consistently.
 
 ---
 
-## Inconsistencies Between Standard vs Streaming
+## Standard vs Streaming Parity (Resolved)
 
 ### 1. Peak Normalization
 
 | Mode | Behavior | Location |
 |------|----------|----------|
 | Standard | Applied via `normalize_peak()` | `master_processor.py:68-81` |
-| Streaming | **Explicitly skipped** | `timeline_renderer.py:314-315` |
+| Streaming | ✅ Applied via two-pass peak gain | `timeline_renderer.py:386-420` |
 
 **Evidence:**
 ```python
-# timeline_renderer.py lines 314-315
+# timeline_renderer.py
 if config.normalize_peak:
-    logger.warning("Peak normalization not supported in streaming mode; skipping.")
+    temp_output = f"{output_path}.tmp.wav"
+    peak_estimator = StreamingPeakEstimator()
+    render_pass(temp_output, peak_estimator=peak_estimator)
+    # ...
+    peak_gain_db = compute_peak_gain_db(peak_after_lufs, config.peak_target_dbfs)
+    render_pass(output_path, gain_db=lufs_gain_db, peak_gain_db=peak_gain_db)
 ```
 
 ---
@@ -190,9 +191,11 @@ if config.normalize_peak:
 | Renderer | EQ Applied |
 |----------|------------|
 | Modular (`TimelineRenderer`) | ✅ Yes — `clip_processor.py:146-157` |
-| Legacy (`legacy_renderer.py`) | ❌ No — EQ presets are not applied |
+| Legacy (`legacy_renderer.py`) | ✅ Yes — `legacy_renderer.py:156-196` |
 
-The `legacy_renderer.py` does not import or call `apply_eq_preset()`. It processes clips via `apply_clip()` which lacks the EQ step present in the modular `ClipProcessor`.
+The `legacy_renderer.py` now applies EQ presets inside `apply_clip()` with the same priority as the modular renderer (clip > track > role default), using `apply_eq_preset()` and `get_preset_for_role()`.
+
+True-peak limiting is not implemented (intentional).
 
 ---
 
@@ -200,11 +203,11 @@ The `legacy_renderer.py` does not import or call `apply_eq_preset()`. It process
 
 | DSP Stage | Standard | Streaming | Continuity Issue |
 |-----------|----------|-----------|------------------|
-| EQ filters | Per-clip (stateless) | Per-clip (stateless) | Potential artifacts at chunk boundaries |
-| Compression | Per-clip | Not applied | Dialogue compression skipped in streaming |
+| EQ filters | Per-clip (stateless) | Per-clip (stateful across chunks) | Resolved for chunk boundaries |
+| Compression | Per-clip | Track-level (stateful across chunks) | Resolved for voice tracks |
 | Ducking | Per-clip with timeline ranges | Per-clip with timeline ranges | OK — ranges are absolute |
 
-**Note:** Stateful streaming DSP classes exist (`StreamingCompressor`, `StreamingHighPass`, etc.) but are not integrated.
+**Note:** Stateful streaming DSP classes are now integrated for compression and EQ. Ducking remains stateless by design.
 
 ---
 
@@ -303,21 +306,31 @@ if ducking_cfg.get("mode") == "scene":
 | Category | Count |
 |----------|-------|
 | Fully Implemented | 25+ features |
-| Partially Implemented | 2 features |
-| Defined but Not Applied | 4 components |
-| Standard/Streaming Inconsistencies | 4 items |
+| Partially Implemented | 1 feature (SFX micro-timing) |
+| Defined but Unused | 1 component (`interpolate_gain()`) |
+| Standard/Streaming Inconsistencies | 0 (all resolved) |
 | Open Questions | 4 ambiguities |
 
 ---
 
 ## Critical Gaps Requiring Attention
 
-1. **`StreamingCompressor`** — Dialogue compression is unavailable in streaming mode
-2. **Stateful streaming EQ** — Potential audio artifacts at chunk boundaries
-3. **Peak normalization** — Not available in streaming mode
-4. **SFX micro-timing** — Placeholder code only
-5. **Scene energy for SFX** — Passed but unused
+1. **SFX micro-timing** — Placeholder code only (`sfx_processor.py:182-187`)
 
 ---
 
-*This audit is read-only. No code changes have been made.*
+## Resolved Since Initial Audit
+
+The following items were previously listed as gaps but have since been implemented:
+
+| Item | Resolution |
+|------|------------|
+| `StreamingCompressor` | ✅ Now used in `chunk_processor.py:221-237` for voice tracks |
+| Stateful streaming EQ | ✅ Implemented in `chunk_processor.py:68-101, 170-187` |
+| Peak normalization (streaming) | ✅ Two-pass implementation in `timeline_renderer.py:393-418` |
+| Scene energy for SFX | ✅ Applied in `sfx_processor.py:228-232` |
+| `ChunkLoader` | ✅ Used in `chunk_processor.py:103-108, 149-156` |
+
+---
+
+*Last updated: February 6, 2026*

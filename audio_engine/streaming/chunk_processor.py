@@ -7,8 +7,13 @@ from typing import Dict, List, Optional
 
 from pydub import AudioSegment
 
+from audio_engine.dsp.loudness import audiosegment_to_float
+from audio_engine.dsp.streaming_compressor import StreamingCompressor
+from audio_engine.dsp.streaming_eq import StreamingHighPass, StreamingLowPass, StreamingPeakEQ
+from audio_engine.dsp.eq import _numpy_to_audiosegment, get_preset_config, get_preset_for_role
 from audio_engine.renderer.clip_processor import ClipProcessor
 from audio_engine.streaming.clip_scheduler import ClipScheduler, ClipSlice
+from audio_engine.streaming.chunk_loader import ChunkLoader
 from audio_engine.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -32,6 +37,75 @@ class ChunkProcessor:
         self.sample_rate = sample_rate
         self.channels = channels
         self.sample_width = sample_width
+        self._streaming_compressors: Dict[str, StreamingCompressor] = {}
+        self._streaming_eq_chains: Dict[str, List] = {}
+        self._chunk_loaders: Dict[str, ChunkLoader] = {}
+
+    def reset_streaming_state(self) -> None:
+        self._streaming_compressors.clear()
+        self._streaming_eq_chains.clear()
+        self._chunk_loaders.clear()
+
+    def _get_streaming_compressor(
+        self,
+        track_id: str,
+        compression_cfg: Dict,
+        sample_rate: int,
+    ) -> StreamingCompressor:
+        compressor = self._streaming_compressors.get(track_id)
+        if compressor is None:
+            compressor = StreamingCompressor(
+                sample_rate=sample_rate,
+                threshold_db=float(compression_cfg.get("threshold", -18.0)),
+                ratio=float(compression_cfg.get("ratio", 4.0)),
+                attack_ms=float(compression_cfg.get("attack_ms", 10.0)),
+                release_ms=float(compression_cfg.get("release_ms", 120.0)),
+                makeup_gain_db=float(compression_cfg.get("makeup_gain", 0.0)),
+            )
+            self._streaming_compressors[track_id] = compressor
+        return compressor
+
+    def _get_streaming_eq_chain(
+        self,
+        chain_key: str,
+        preset_name: str,
+        sample_rate: int,
+    ) -> Optional[List]:
+        chain = self._streaming_eq_chains.get(chain_key)
+        if chain is not None:
+            return chain
+
+        try:
+            config = get_preset_config(preset_name)
+        except ValueError as exc:
+            logger.warning(f"Unknown EQ preset '{preset_name}', skipping streaming EQ: {exc}")
+            return None
+
+        chain = []
+        if "high_pass" in config:
+            chain.append(StreamingHighPass(config["high_pass"], sample_rate))
+        if "low_pass" in config:
+            chain.append(StreamingLowPass(config["low_pass"], sample_rate))
+        if "primary" in config:
+            primary = config["primary"]
+            chain.append(
+                StreamingPeakEQ(
+                    freq_hz=primary.get("freq", 1000),
+                    gain_db=primary.get("gain", 0),
+                    q=primary.get("q", 1.0),
+                    sample_rate=sample_rate,
+                )
+            )
+
+        self._streaming_eq_chains[chain_key] = chain
+        return chain
+
+    def _get_chunk_loader(self, file_path: str) -> ChunkLoader:
+        loader = self._chunk_loaders.get(file_path)
+        if loader is None:
+            loader = ChunkLoader(file_path)
+            self._chunk_loaders[file_path] = loader
+        return loader
 
     def process_chunk(
         self,
@@ -59,6 +133,11 @@ class ChunkProcessor:
             track_role = track.get("role")
             track_semantic_role = track.get("semantic_role")
             track_eq_preset = track.get("eq_preset")
+            track_streaming_compression = (
+                track_role == "voice"
+                and default_compression
+                and default_compression.get("enabled")
+            )
 
             buffer = AudioSegment.silent(duration=chunk_ms, frame_rate=self.sample_rate or 44100)
             if self.channels and buffer.channels != self.channels:
@@ -67,22 +146,54 @@ class ChunkProcessor:
                 buffer = buffer.set_sample_width(self.sample_width)
             for clip_slice in slices:
                 try:
-                    audio = AudioSegment.from_file(
-                        clip_slice.file_path,
-                        start_second=clip_slice.source_start_sec,
-                        duration=clip_slice.duration_sec,
+                    loader = self._get_chunk_loader(clip_slice.file_path)
+                    samples, meta = loader.get_chunk(
+                        start_sec=clip_slice.source_start_sec,
+                        duration_sec=clip_slice.duration_sec,
+                        target_sample_rate=self.sample_rate,
+                        target_channels=self.channels,
+                        target_sample_width=self.sample_width,
                     )
-                    if self.sample_rate and audio.frame_rate != self.sample_rate:
-                        audio = audio.set_frame_rate(self.sample_rate)
-                    if self.channels and audio.channels != self.channels:
-                        audio = audio.set_channels(self.channels)
-                    if self.sample_width and audio.sample_width != self.sample_width:
-                        audio = audio.set_sample_width(self.sample_width)
+                    audio = _numpy_to_audiosegment(
+                        samples,
+                        sample_rate=meta.sample_rate,
+                        sample_width=meta.sample_width,
+                        channels=meta.channels,
+                    )
+
+                    clip_semantic_role = clip_slice.clip.get("semantic_role", track_semantic_role)
+                    eq_preset = (
+                        clip_slice.clip.get("eq_preset")
+                        or track_eq_preset
+                        or get_preset_for_role(track_role, clip_semantic_role)
+                    )
+                    chain = None
+                    if eq_preset:
+                        chain_key = f"{track_id}:{clip_slice.clip.get('id') or clip_slice.file_path}:{clip_slice.clip.get('start', 0)}:{eq_preset}"
+                        chain = self._get_streaming_eq_chain(
+                            chain_key=chain_key,
+                            preset_name=eq_preset,
+                            sample_rate=audio.frame_rate,
+                        )
+                        if chain:
+                            samples = audiosegment_to_float(audio)
+                            for eq_filter in chain:
+                                samples = eq_filter.process_chunk(samples)
+                            audio = _numpy_to_audiosegment(
+                                samples,
+                                sample_rate=audio.frame_rate,
+                                sample_width=audio.sample_width,
+                                channels=audio.channels,
+                            )
 
                     clip_copy = dict(clip_slice.clip)
                     clip_copy["_audio_override"] = audio
                     clip_copy["_timeline_start"] = clip_slice.output_start_sec
                     clip_copy["_overlay_start"] = clip_slice.output_start_sec - chunk_start
+                    if track_streaming_compression:
+                        clip_copy["_skip_compression"] = True
+                    if eq_preset and chain:
+                        clip_copy["_skip_eq"] = True
 
                     buffer = self.clip_processor.process_clip(
                         canvas=buffer,
@@ -106,6 +217,24 @@ class ChunkProcessor:
                     buffer = apply_role_loudness(buffer, track_role)
                 except Exception as exc:
                     logger.warning(f"Failed to apply role loudness for track {track_id}: {exc}")
+
+            if track_streaming_compression:
+                try:
+                    compressor = self._get_streaming_compressor(
+                        track_id=track_id,
+                        compression_cfg=default_compression,
+                        sample_rate=buffer.frame_rate,
+                    )
+                    samples = audiosegment_to_float(buffer)
+                    processed = compressor.process_chunk(samples)
+                    buffer = _numpy_to_audiosegment(
+                        processed,
+                        sample_rate=buffer.frame_rate,
+                        sample_width=buffer.sample_width,
+                        channels=buffer.channels,
+                    )
+                except Exception as exc:
+                    logger.warning(f"Failed to apply streaming compression for track {track_id}: {exc}")
 
             return buffer
 

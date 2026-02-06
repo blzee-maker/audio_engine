@@ -144,7 +144,7 @@ class ClipProcessor:
         # EQ shapes frequencies early, enabling lighter ducking later
         # Priority: clip eq_preset > track eq_preset > role-based default
         eq_preset = clip.get("eq_preset") or track_eq_preset or get_preset_for_role(track_role, semantic_role)
-        if eq_preset:
+        if eq_preset and not clip.get("_skip_eq"):
             try:
                 audio = apply_eq_preset(audio, eq_preset)
                 if audio is None:
@@ -284,7 +284,8 @@ class ClipProcessor:
                         logger.warning(f"Failed to apply ducking for clip {clip.get('file', 'unknown')}: {e}")
 
         # Step 7: Dialogue Compression (if voice)
-        if track_role == "voice" and compression_cfg and compression_cfg.get("enabled"):
+        skip_compression = bool(clip.get("_skip_compression"))
+        if not skip_compression and track_role == "voice" and compression_cfg and compression_cfg.get("enabled"):
             try:
                 audio = self.compression_func(audio, compression_cfg)
             except Exception as e:

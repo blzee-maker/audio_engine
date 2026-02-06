@@ -23,6 +23,7 @@ from audio_engine.dsp.normalization import normalize_peak
 from audio_engine.dsp.fades import apply_fade_in, apply_fade_out
 from audio_engine.dsp.loudness import apply_lufs_target
 from audio_engine.dsp.balance import apply_role_loudness
+from audio_engine.dsp.eq import apply_eq_preset, get_preset_for_role
 
 # Utils
 from audio_engine.utils.debug import debug_print_timeline
@@ -110,7 +111,9 @@ def apply_clip(
     role_ranges: Optional[Dict[str, List[Tuple[float, float]]]] = None,
     track_role: Optional[str] = None,
     default_ducking: Optional[Dict] = None,
-    default_compression: Optional[Dict] = None
+    default_compression: Optional[Dict] = None,
+    track_semantic_role: Optional[str] = None,
+    track_eq_preset: Optional[str] = None,
 ) -> AudioSegment:
     """Apply a clip to the canvas with all processing effects."""
     # Validate canvas is not None
@@ -152,6 +155,21 @@ def apply_clip(
     audio = audio + track_gain
     if "gain" in clip:
         audio = audio + clip["gain"]
+
+    # EQ Presets (clip > track > role default)
+    semantic_role = clip.get("semantic_role", track_semantic_role)
+    eq_preset = clip.get("eq_preset") or track_eq_preset or get_preset_for_role(track_role, semantic_role)
+    if eq_preset and not clip.get("_skip_eq"):
+        try:
+            audio = apply_eq_preset(audio, eq_preset)
+            if audio is None:
+                logger.error(f"apply_eq_preset returned None for clip {clip.get('file', 'unknown')}")
+                raise AudioProcessingError("apply_eq_preset returned None")
+            logger.debug(f"Applied EQ preset '{eq_preset}' to clip {clip.get('file', 'unknown')}")
+        except ValueError as e:
+            logger.warning(f"Unknown EQ preset '{eq_preset}' for clip {clip.get('file', 'unknown')}: {e}")
+        except Exception as e:
+            logger.warning(f"Failed to apply EQ preset for clip {clip.get('file', 'unknown')}: {e}")
 
     # Scene Energy -> music intensity (using extracted function)
     ramp_duration_ms = int(clip_rules.get("energy_ramp_duration", 3000))
@@ -364,6 +382,8 @@ def render_timeline(timeline_path: str, output_path: str) -> None:
         track_id = track.get("id", "unknown")
         track_gain = track.get("gain", 0)
         track_role = track.get("role")
+        track_semantic_role = track.get("semantic_role")
+        track_eq_preset = track.get("eq_preset")
         clips = track.get("clips", [])
         
         logger.debug(f"Processing track '{track_id}' (role: {track_role}, clips: {len(clips)})")
@@ -385,7 +405,9 @@ def render_timeline(timeline_path: str, output_path: str) -> None:
                     role_ranges=role_ranges,
                     track_role=track_role,
                     default_ducking=default_ducking,
-                    default_compression=default_compression
+                    default_compression=default_compression,
+                    track_semantic_role=track_semantic_role,
+                    track_eq_preset=track_eq_preset,
                 )
                 
                 # Validate that apply_clip returned a valid AudioSegment
